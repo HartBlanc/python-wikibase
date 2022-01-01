@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 from wikibase_api import ApiError
 
 from python_wikibase.utils.data_types import class_to_data_type, data_type_to_class
@@ -55,54 +57,64 @@ class Entity(Value):
 
         return self
 
-    def get(self, entity_id=None):
+    def get(self, entity_ids=None, attributes=None):
         """Fetch information about the specified entity from Wikibase
 
-        :param entity_id: ID of the entity on Wikibase (e.g. "Q1")
-        :type entity_id: str
-        :return: self
-        :rtype: Entity
+        :param entity_ids: IDs of the entity on Wikibase (e.g. ["Q1", "Q2"])
+        :type entity_id: Optional[list[str]]
+        :param attributes: The attributes to fetch for the entities
+        :type attributes: Optional[list[str]]
+        :return: requested entities
+        :rtype: list[Entity]
         """
-        if not entity_id:
+        if not entity_ids:
             if not self.entity_id:
                 raise ValueError(
                     f"You need to specify the {self.entity_type}'s entity_id before being able to "
                     f"use the get() function"
                 )
             else:
-                entity_id = self.entity_id
+                entity_ids = [self.entity_id]
 
         try:
-            r = self.api.entity.get(entity_id)
+            r = self.api.entity.get(entity_ids, attributes=attributes)
         except ApiError as e:
             raise SearchError(f"Could not get {self.entity_type}: {e}") from None
         if "success" not in r or r["success"] != 1:
-            raise NotFoundError(
-                f'No {self.entity_type} found with the entity_id "{self.entity_id}"'
-            )
+            raise SearchError(f"Unsuccessful response for {self.entity_type}: {r}") from None
 
-        entity = r["entities"][entity_id]
-        if "missing" in entity:
-            raise NotFoundError(
-                f'No {self.entity_type} found with the entity_id "{self.entity_id}"'
-            )
+        entities = []
+        for entity_id, entity in r["entities"].items():
+            if "missing" in entity:
+                raise NotFoundError(
+                    f'No {self.entity_type} found with the entity_id "{entity_id}"'
+                )
 
-        # Save entity_id and label
-        self.entity_id = entity["id"]
-        self.label = self.py_wb.Label().unmarshal(self.entity_id, entity["labels"])
+            if self.entity_id == entity_id:
+                e = self
+            else:
+                e = deepcopy(self)
+            e.entity_id = entity["id"]
+            if "lables" in entity:
+                e.label = e.py_wb.Label().unmarshal(e.entity_id, entity["labels"])
 
-        # Save data_type
-        if self.entity_type == "property":
-            self.data_type = data_type_to_class[entity["datatype"]]
+            # Save data_type
+            if e.entity_type == "property":
+                if "datatype" in entity:
+                    e.data_type = data_type_to_class[entity["datatype"]]
 
-        # Save other attributes
-        self.description = self.py_wb.Description().unmarshal(
-            self.entity_id, entity["descriptions"]
-        )
-        self.aliases = self.py_wb.Aliases().unmarshal(self.entity_id, entity["aliases"])
-        self.claims = self.py_wb.Claims().unmarshal(self.entity_id, entity["claims"])
+            # Save other attributes
+            if "descriptions" in entity:
+                e.description = e.py_wb.Description().unmarshal(
+                    e.entity_id, entity["descriptions"]
+                )
+            if "aliases" in entity:
+                e.aliases = self.py_wb.Aliases().unmarshal(e.entity_id, entity["aliases"])
+            if "claims" in entity:
+                e.claims = self.py_wb.Claims().unmarshal(e.entity_id, entity["claims"])
+            entities.append(e)
 
-        return self
+        return entities
 
     def delete(self):
         """Delete the entity from Wikibase"""
